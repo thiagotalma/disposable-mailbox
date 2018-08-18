@@ -8,6 +8,5 @@
     "ext-imap": "*"
   },
   "config": {
-    "vendor-dir": "src/backend-libs"
   }
 }
