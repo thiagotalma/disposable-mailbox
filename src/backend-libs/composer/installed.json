@@ -1,94 +1,5 @@
 [
     {
-        "name": "php-imap/php-imap",
-        "version": "2.0.3",
-        "version_normalized": "2.0.3.0",
-        "source": {
-            "type": "git",
-            "url": "https://github.com/barbushin/php-imap.git",
-            "reference": "cc1a49a3f68090db182183c59ffbc09055d59f5b"
-        },
-        "dist": {
-            "type": "zip",
-            "url": "https://api.github.com/repos/barbushin/php-imap/zipball/cc1a49a3f68090db182183c59ffbc09055d59f5b",
-            "reference": "cc1a49a3f68090db182183c59ffbc09055d59f5b",
-            "shasum": ""
-        },
-        "require": {
-            "php": ">=5.3.0"
-        },
-        "time": "2015-09-16 07:40:39",
-        "type": "library",
-        "installation-source": "dist",
-        "autoload": {
-            "psr-0": {
-                "PhpImap": "src/"
-            }
-        },
-        "notification-url": "https://packagist.org/downloads/",
-        "license": [
-            "BSD 3-Clause"
-        ],
-        "authors": [
-            {
-                "name": "Sergey Barbushin",
-                "email": "barbushin@gmail.com",
-                "homepage": "http://linkedin.com/in/barbushin"
-            }
-        ],
-        "description": "PHP class to access mailbox by POP3/IMAP/NNTP using IMAP extension",
-        "homepage": "https://github.com/barbushin/php-imap",
-        "keywords": [
-            "imap",
-            "mail",
-            "php"
-        ]
-    },
-    {
-        "name": "gnugat/PronounceableWord",
-        "version": "2.0.0",
-        "version_normalized": "2.0.0.0",
-        "source": {
-            "type": "git",
-            "url": "git@github.com:gnugat/PronounceableWord.git",
-            "reference": "60a19dc7148e92de35ea536b9f873b86365d48f0"
-        },
-        "dist": {
-            "type": "zip",
-            "url": "https://api.github.com/repos/gnugat/PronounceableWord/zipball/60a19dc7148e92de35ea536b9f873b86365d48f0",
-            "reference": "60a19dc7148e92de35ea536b9f873b86365d48f0",
-            "shasum": ""
-        },
-        "require": {
-            "php": ">=5.2"
-        },
-        "time": "2012-01-08 19:36:58",
-        "type": "library",
-        "installation-source": "dist",
-        "autoload": {
-            "psr-0": {
-                "PronounceableWord_": "src/"
-            }
-        },
-        "notification-url": "https://packagist.org/downloads/",
-        "license": [
-            "MIT"
-        ],
-        "authors": [
-            {
-                "name": "Loïc Chardonnet"
-            }
-        ],
-        "description": "A light, customizable and simple library generating random and pronounceable words without using dictionaries or Markov chains.",
-        "homepage": "https://github.com/gnugat/PronounceableWord",
-        "keywords": [
-            "generator",
-            "pronounceable",
-            "word"
-        ],
-        "abandoned": true
-    },
-    {
         "name": "ezyang/htmlpurifier",
         "version": "v4.10.0",
         "version_normalized": "4.10.0.0",
@@ -109,7 +20,7 @@
         "require-dev": {
             "simpletest/simpletest": "^1.1"
         },
-        "time": "2018-02-23 01:58:20",
+        "time": "2018-02-23T01:58:20+00:00",
         "type": "library",
         "installation-source": "dist",
         "autoload": {
@@ -158,7 +69,7 @@
         "require-dev": {
             "phpunit/phpunit": "4.2.*"
         },
-        "time": "2017-08-14 05:06:04",
+        "time": "2017-08-14T05:06:04+00:00",
         "type": "library",
         "installation-source": "dist",
         "autoload": {
@@ -200,6 +111,99 @@
             "time",
             "translation",
             "validate"
+        ]
+    },
+    {
+        "name": "gnugat/PronounceableWord",
+        "version": "2.0.0",
+        "version_normalized": "2.0.0.0",
+        "source": {
+            "type": "git",
+            "url": "git@github.com:gnugat/PronounceableWord.git",
+            "reference": "60a19dc7148e92de35ea536b9f873b86365d48f0"
+        },
+        "dist": {
+            "type": "zip",
+            "url": "https://api.github.com/repos/gnugat/PronounceableWord/zipball/60a19dc7148e92de35ea536b9f873b86365d48f0",
+            "reference": "60a19dc7148e92de35ea536b9f873b86365d48f0",
+            "shasum": ""
+        },
+        "require": {
+            "php": ">=5.2"
+        },
+        "time": "2012-01-08T19:36:58+00:00",
+        "type": "library",
+        "installation-source": "dist",
+        "autoload": {
+            "psr-0": {
+                "PronounceableWord_": "src/"
+            }
+        },
+        "notification-url": "https://packagist.org/downloads/",
+        "license": [
+            "MIT"
+        ],
+        "authors": [
+            {
+                "name": "Loïc Chardonnet"
+            }
+        ],
+        "description": "A light, customizable and simple library generating random and pronounceable words without using dictionaries or Markov chains.",
+        "homepage": "https://github.com/gnugat/PronounceableWord",
+        "keywords": [
+            "generator",
+            "pronounceable",
+            "word"
+        ],
+        "abandoned": true
+    },
+    {
+        "name": "php-imap/php-imap",
+        "version": "2.2.5",
+        "version_normalized": "2.2.5.0",
+        "source": {
+            "type": "git",
+            "url": "https://github.com/barbushin/php-imap.git",
+            "reference": "3be0a7e1fbd99c4fd35b3ae3e90b130d44520b5d"
+        },
+        "dist": {
+            "type": "zip",
+            "url": "https://api.github.com/repos/barbushin/php-imap/zipball/3be0a7e1fbd99c4fd35b3ae3e90b130d44520b5d",
+            "reference": "3be0a7e1fbd99c4fd35b3ae3e90b130d44520b5d",
+            "shasum": ""
+        },
+        "require": {
+            "ext-imap": "*",
+            "php": ">=5.3.0"
+        },
+        "time": "2017-10-06T05:49:25+00:00",
+        "type": "library",
+        "installation-source": "dist",
+        "autoload": {
+            "psr-4": {
+                "PhpImap\\": "src/PhpImap/"
+            }
+        },
+        "notification-url": "https://packagist.org/downloads/",
+        "license": [
+            "MIT"
+        ],
+        "authors": [
+            {
+                "name": "Sergey Barbushin",
+                "email": "barbushin@gmail.com",
+                "homepage": "http://linkedin.com/in/barbushin"
+            }
+        ],
+        "description": "Manage mailboxes, filter/get/delete emails in PHP (supports IMAP/POP3/NNTP)",
+        "homepage": "https://github.com/barbushin/php-imap",
+        "keywords": [
+            "imap",
+            "mail",
+            "mailbox",
+            "php",
+            "pop3",
+            "receive emails"
         ]
     }
 ]

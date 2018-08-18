@@ -11,14 +11,27 @@ class Mailbox {
 	protected $imapPath;
 	protected $imapLogin;
 	protected $imapPassword;
+	protected $connectionRetry = 0;
+	protected $connectionRetryDelay = 100;
 	protected $imapOptions = 0;
 	protected $imapRetriesNum = 0;
 	protected $imapParams = array();
 	protected $serverEncoding;
-	protected $attachmentsDir;
+	protected $attachmentsDir = null;
+	protected $expungeOnDisconnect = true;
+	protected $timeouts = array();
+	private $imapStream;
 
+	/**
+	 * @param string $imapPath
+	 * @param string $login
+	 * @param string $password
+	 * @param string $attachmentsDir
+	 * @param string $serverEncoding
+	 * @throws Exception
+	 */
 	public function __construct($imapPath, $login, $password, $attachmentsDir = null, $serverEncoding = 'UTF-8') {
-		$this->imapPath = $imapPath;
+		$this->setImapPath($imapPath);
 		$this->imapLogin = $login;
 		$this->imapPassword = $password;
 		$this->serverEncoding = strtoupper($serverEncoding);
@@ -28,6 +41,29 @@ class Mailbox {
 			}
 			$this->attachmentsDir = rtrim(realpath($attachmentsDir), '\\/');
 		}
+	}
+
+	public function getServerEncoding() {
+		return $this->serverEncoding;
+	}
+
+	public function setServerEncoding($serverEncoding) {
+		$this->serverEncoding = $serverEncoding;
+	}
+
+	/**
+	 * @param int $timeout Timeout in seconds
+	 * @param array $types One of the following: IMAP_OPENTIMEOUT, IMAP_READTIMEOUT, IMAP_WRITETIMEOUT, IMAP_CLOSETIMEOUT
+	 */
+	public function setTimeouts($timeout, $types = array(IMAP_OPENTIMEOUT, IMAP_READTIMEOUT, IMAP_WRITETIMEOUT, IMAP_CLOSETIMEOUT)) {
+		$this->timeouts = array_fill_keys($types, $timeout);
+	}
+
+	/**
+	 * @return string
+	 */
+	public function getLogin() {
+		return $this->imapLogin;
 	}
 
 	/**
@@ -43,37 +79,97 @@ class Mailbox {
 	}
 
 	/**
+	 * Set custom folder for attachments in case you want to have tree of folders for each email
+	 * i.e. a/1 b/1 c/1 where a,b,c - senders, i.e. john@smith.com
+	 * @param string $dir folder where to save attachments
+	 *
+	 * @return void
+	 */
+	public function setAttachmentsDir($dir) {
+		$this->attachmentsDir = $dir;
+	}
+
+	public function setConnectionRetry($maxAttempts) {
+		$this->connectionRetry = $maxAttempts;
+	}
+
+	public function setConnectionRetryDelay($milliseconds) {
+		$this->connectionRetryDelay = $milliseconds;
+	}
+
+	/**
 	 * Get IMAP mailbox connection stream
 	 * @param bool $forceConnection Initialize connection if it's not initialized
 	 * @return null|resource
 	 */
 	public function getImapStream($forceConnection = true) {
-		static $imapStream;
 		if($forceConnection) {
-			if($imapStream && (!is_resource($imapStream) || !imap_ping($imapStream))) {
+			if($this->imapStream && (!is_resource($this->imapStream) || !imap_ping($this->imapStream))) {
 				$this->disconnect();
-				$imapStream = null;
+				$this->imapStream = null;
 			}
-			if(!$imapStream) {
-				$imapStream = $this->initImapStream();
+			if(!$this->imapStream) {
+				$this->imapStream = $this->initImapStreamWithRetry();
 			}
 		}
-		return $imapStream;
+		return $this->imapStream;
+	}
+
+	/**
+	 * Switch mailbox without opening a new connection
+	 *
+	 * @param string $imapPath
+	 * @throws Exception
+	 */
+	public function switchMailbox($imapPath = '') {
+		$this->setImapPath($imapPath);
+		$imapStream = @imap_reopen($this->getImapStream(), $this->imapPath);
+		if(!$imapStream) {
+			throw new Exception("Couldn't switch  mailbox: " . imap_last_error());
+		}
+	}
+
+	protected function initImapStreamWithRetry() {
+		$retry = $this->connectionRetry;
+
+		do {
+			try {
+				return $this->initImapStream();
+			}
+			catch(ConnectionException $exception) {
+			}
+		}
+		while(--$retry > 0 && (!$this->connectionRetryDelay || !usleep($this->connectionRetryDelay * 1000)));
+
+		throw $exception;
 	}
 
 	protected function initImapStream() {
+		foreach($this->timeouts as $type => $timeout) {
+			imap_timeout($type, $timeout);
+		}
 		$imapStream = @imap_open($this->imapPath, $this->imapLogin, $this->imapPassword, $this->imapOptions, $this->imapRetriesNum, $this->imapParams);
 		if(!$imapStream) {
-			throw new Exception('Connection error: ' . imap_last_error());
+			$lastError = imap_last_error();
+			imap_errors();
+			throw new ConnectionException('Connection error: ' . $lastError);
 		}
 		return $imapStream;
 	}
 
-	protected function disconnect() {
+	public function disconnect() {
 		$imapStream = $this->getImapStream(false);
 		if($imapStream && is_resource($imapStream)) {
-			imap_close($imapStream, CL_EXPUNGE);
+			imap_close($imapStream, $this->expungeOnDisconnect ? CL_EXPUNGE : 0);
 		}
+	}
+
+	/**
+	 * Sets 'expunge on disconnect' parameter
+	 * @param bool $isEnabled
+	 */
+	public function setExpungeOnDisconnect($isEnabled) {
+		$this->expungeOnDisconnect = $isEnabled;
 	}
 
 	/**
@@ -93,14 +189,34 @@ class Mailbox {
 	}
 
 	/**
-	 * Creates a new mailbox specified by mailbox.
-	 *
+	 * Creates a new mailbox
+	 * @param $name
 	 * @return bool
 	 */
-
-	public function createMailbox() {
-		return imap_createmailbox($this->getImapStream(), imap_utf7_encode($this->imapPath));
+	public function createMailbox($name) {
+		return imap_createmailbox($this->getImapStream(), imap_utf7_encode($this->imapPath . '.' . $name));
 	}
+
+	/**
+	 * Delete mailbox
+	 * @param $name
+	 * @return bool
+	 */
+	public function deleteMailbox($name) {
+		return imap_deletemailbox($this->getImapStream(), imap_utf7_encode($this->imapPath . '.' . $name));
+	}
+
+	/**
+	 * Rename mailbox
+	 * @param $oldName
+	 * @param $newName
+	 * @return bool
+	 */
+	public function renameMailbox($oldName, $newName) {
+		return imap_renamemailbox($this->getImapStream(), imap_utf7_encode($this->imapPath . '.' . $oldName), imap_utf7_encode($this->imapPath . '.' . $newName));
+	}
+
+
 
 	/**
 	 * Gets status information about the given mailbox.
@@ -110,11 +226,9 @@ class Mailbox {
 	 *
 	 * @return stdClass if the box doesn't exist
 	 */
-
 	public function statusMailbox() {
 		return imap_status($this->getImapStream(), $this->imapPath, SA_ALL);
 	}
-
 
 	/**
 	 * Gets listing the folders
@@ -122,53 +236,27 @@ class Mailbox {
 	 * This function returns an object containing listing the folders.
 	 * The object has the following properties: messages, recent, unseen, uidnext, and uidvalidity.
 	 *
+	 * @param string $pattern
 	 * @return array listing the folders
+	 * @throws Exception
 	 */
-
-	public function getListingFolders() {
-		$folders = imap_list($this->getImapStream(), $this->imapPath, "*");
-		foreach ($folders as $key => $folder)
-		{
-			$folder = str_replace($this->imapPath, "", imap_utf7_decode($folder));
-			$folders[$key] = $folder;
+	public function getListingFolders($pattern = '*') {
+		$folders = imap_list($this->getImapStream(), $this->imapPath, $pattern);
+		if($folders === false) {
+			throw new Exception("Unexpected response from IMAP server");
+		}
+		foreach($folders as $key => $folder) {
+			$folders[$key] = imap_utf7_decode($folder);
 		}
 		return $folders;
 	}
 
-
 	/**
-	 * This function performs a search on the mailbox currently opened in the given IMAP stream.
+	 * This function uses imap_search() to perform a search on the mailbox currently opened in the given IMAP stream.
 	 * For example, to match all unanswered mails sent by Mom, you'd use: "UNANSWERED FROM mom".
-	 * Searches appear to be case insensitive. This list of criteria is from a reading of the UW
-	 * c-client source code and may be incomplete or inaccurate (see also RFC2060, section 6.4.4).
 	 *
-	 * @param string $criteria String, delimited by spaces, in which the following keywords are allowed. Any multi-word arguments (e.g. FROM "joey smith") must be quoted. Results will match all criteria entries.
-	 *    ALL - return all mails matching the rest of the criteria
-	 *    ANSWERED - match mails with the \\ANSWERED flag set
-	 *    BCC "string" - match mails with "string" in the Bcc: field
-	 *    BEFORE "date" - match mails with Date: before "date"
-	 *    BODY "string" - match mails with "string" in the body of the mail
-	 *    CC "string" - match mails with "string" in the Cc: field
-	 *    DELETED - match deleted mails
-	 *    FLAGGED - match mails with the \\FLAGGED (sometimes referred to as Important or Urgent) flag set
-	 *    FROM "string" - match mails with "string" in the From: field
-	 *    KEYWORD "string" - match mails with "string" as a keyword
-	 *    NEW - match new mails
-	 *    OLD - match old mails
-	 *    ON "date" - match mails with Date: matching "date"
-	 *    RECENT - match mails with the \\RECENT flag set
-	 *    SEEN - match mails that have been read (the \\SEEN flag is set)
-	 *    SINCE "date" - match mails with Date: after "date"
-	 *    SUBJECT "string" - match mails with "string" in the Subject:
-	 *    TEXT "string" - match mails with text "string"
-	 *    TO "string" - match mails with "string" in the To:
-	 *    UNANSWERED - match mails that have not been answered
-	 *    UNDELETED - match mails that are not deleted
-	 *    UNFLAGGED - match mails that are not flagged
-	 *    UNKEYWORD "string" - match mails that do not have the keyword "string"
-	 *    UNSEEN - match mails which have not been read yet
-	 *
-	 * @return array Mails ids
+	 * @param string $criteria See http://php.net/imap_search for a complete list of available criteria
+	 * @return array mailsIds (or empty array)
 	 */
 	public function searchMailbox($criteria = 'ALL') {
 		$mailsIds = imap_search($this->getImapStream(), $criteria, SE_UID, $this->serverEncoding);
@@ -177,6 +265,8 @@ class Mailbox {
 
 	/**
 	 * Save mail body.
+	 * @param $mailId
+	 * @param string $filename
 	 * @return bool
 	 */
 	public function saveMail($mailId, $filename = 'email.eml') {
@@ -185,14 +275,31 @@ class Mailbox {
 
 	/**
 	 * Marks mails listed in mailId for deletion.
+	 * @param $mailId
 	 * @return bool
 	 */
 	public function deleteMail($mailId) {
-		return imap_delete($this->getImapStream(), $mailId, FT_UID);
+		return imap_delete($this->getImapStream(), $mailId . ':' . $mailId, FT_UID);
 	}
 
+	/**
+	 * Moves mails listed in mailId into new mailbox
+	 * @param $mailId
+	 * @param $mailBox
+	 * @return bool
+	 */
 	public function moveMail($mailId, $mailBox) {
 		return imap_mail_move($this->getImapStream(), $mailId, $mailBox, CP_UID) && $this->expungeDeletedMails();
+	}
+
+	/**
+	 * Copys mails listed in mailId into new mailbox
+	 * @param $mailId
+	 * @param $mailBox
+	 * @return bool
+	 */
+	public function copyMail($mailId, $mailBox) {
+		return imap_mail_copy($this->getImapStream(), $mailId, $mailBox, CP_UID) && $this->expungeDeletedMails();
 	}
 
 	/**
@@ -205,6 +312,7 @@ class Mailbox {
 
 	/**
 	 * Add the flag \Seen to a mail.
+	 * @param $mailId
 	 * @return bool
 	 */
 	public function markMailAsRead($mailId) {
@@ -213,6 +321,7 @@ class Mailbox {
 
 	/**
 	 * Remove the flag \Seen from a mail.
+	 * @param $mailId
 	 * @return bool
 	 */
 	public function markMailAsUnread($mailId) {
@@ -221,6 +330,7 @@ class Mailbox {
 
 	/**
 	 * Add the flag \Flagged to a mail.
+	 * @param $mailId
 	 * @return bool
 	 */
 	public function markMailAsImportant($mailId) {
@@ -229,6 +339,7 @@ class Mailbox {
 
 	/**
 	 * Add the flag \Seen to a mails.
+	 * @param array $mailId
 	 * @return bool
 	 */
 	public function markMailsAsRead(array $mailId) {
@@ -237,6 +348,7 @@ class Mailbox {
 
 	/**
 	 * Remove the flag \Seen from some mails.
+	 * @param array $mailId
 	 * @return bool
 	 */
 	public function markMailsAsUnread(array $mailId) {
@@ -245,6 +357,7 @@ class Mailbox {
 
 	/**
 	 * Add the flag \Flagged to some mails.
+	 * @param array $mailId
 	 * @return bool
 	 */
 	public function markMailsAsImportant(array $mailId) {
@@ -299,10 +412,8 @@ class Mailbox {
 	 */
 	public function getMailsInfo(array $mailsIds) {
 		$mails = imap_fetch_overview($this->getImapStream(), implode(',', $mailsIds), FT_UID);
-		if(is_array($mails) && count($mails))
-		{
-			foreach($mails as &$mail)
-			{
+		if(is_array($mails) && count($mails)) {
+			foreach($mails as &$mail) {
 				if(isset($mail->subject)) {
 					$mail->subject = $this->decodeMimeStr($mail->subject, $this->serverEncoding);
 				}
@@ -315,6 +426,17 @@ class Mailbox {
 			}
 		}
 		return $mails;
+	}
+
+	/**
+	 * Get headers for all messages in the defined mailbox,
+	 * returns an array of string formatted with header info,
+	 * one element per mail message.
+	 *
+	 * @return array
+	 */
+	public function getMailboxHeaders() {
+		return imap_headers($this->getImapStream());
 	}
 
 	/**
@@ -379,41 +501,57 @@ class Mailbox {
 	 */
 	public function getQuotaLimit() {
 		$quota = $this->getQuota();
-		if(is_array($quota)) {
-			$quota = $quota['STORAGE']['limit'];
-		}
-		return $quota;
+		return isset($quota['STORAGE']['limit']) ? $quota['STORAGE']['limit'] : false;
 	}
 
 	/**
 	 * Return quota usage in KB
-	 * @return int - FALSE in the case of call failure
+	 * @return int FALSE in the case of call failure
 	 */
 	public function getQuotaUsage() {
 		$quota = $this->getQuota();
-		if(is_array($quota)) {
-			$quota = $quota['STORAGE']['usage'];
-		}
-		return $quota;
+		return isset($quota['STORAGE']['usage']) ? $quota['STORAGE']['usage'] : false;
 	}
 
-    /**
-     * Get mail data
-     *
-     * @param $mailId
-     * @param bool $markAsSeen
-     * @return IncomingMail
-     */
-	public function getMail($mailId, $markAsSeen = true) {
-		$head = imap_rfc822_parse_headers(imap_fetchheader($this->getImapStream(), $mailId, FT_UID));
+	/**
+	 * Get raw mail data
+	 *
+	 * @param $msgId
+	 * @param bool $markAsSeen
+	 * @return mixed
+	 */
+	public function getRawMail($msgId, $markAsSeen = true) {
+		$options = FT_UID;
+		if(!$markAsSeen) {
+			$options |= FT_PEEK;
+		}
 
-		$mail = new IncomingMail();
-		$mail->id = $mailId;
-		$mail->date = date('Y-m-d H:i:s', isset($head->date) ? strtotime(preg_replace('/\(.*?\)/', '', $head->date)) : time());
-		$mail->subject = isset($head->subject) ? $this->decodeMimeStr($head->subject, $this->serverEncoding) : null;
-		$mail->fromName = isset($head->from[0]->personal) ? $this->decodeMimeStr($head->from[0]->personal, $this->serverEncoding) : null;
-		$mail->fromAddress = strtolower($head->from[0]->mailbox . '@' . $head->from[0]->host);
+		return imap_fetchbody($this->getImapStream(), $msgId, '', $options);
+	}
 
+	/**
+	 * Get mail header
+	 *
+	 * @param $mailId
+	 * @return IncomingMailHeader
+	 */
+	public function getMailHeader($mailId) {
+		$headersRaw = imap_fetchheader($this->getImapStream(), $mailId, FT_UID);
+		$head = imap_rfc822_parse_headers($headersRaw);
+
+		$header = new IncomingMailHeader();
+		$header->headersRaw = $headersRaw;
+		$header->headers = $head;
+		$header->id = $mailId;
+		$header->date = date('Y-m-d H:i:s', isset($head->date) ? strtotime(preg_replace('/\(.*?\)/', '', $head->date)) : time());
+		$header->subject = isset($head->subject) ? $this->decodeMimeStr($head->subject, $this->serverEncoding) : null;
+		if(isset($head->from)) {
+			$header->fromName = isset($head->from[0]->personal) ? $this->decodeMimeStr($head->from[0]->personal, $this->serverEncoding) : null;
+			$header->fromAddress = strtolower($head->from[0]->mailbox . '@' . $head->from[0]->host);
+		}
+		elseif(preg_match("/smtp.mailfrom=[-0-9a-zA-Z.+_]+@[-0-9a-zA-Z.+_]+.[a-zA-Z]{2,4}/", $headersRaw, $matches)) {
+			$header->fromAddress = substr($matches[0], 14);
+		}
 		if(isset($head->to)) {
 			$toStrings = array();
 			foreach($head->to as $to) {
@@ -421,27 +559,51 @@ class Mailbox {
 					$toEmail = strtolower($to->mailbox . '@' . $to->host);
 					$toName = isset($to->personal) ? $this->decodeMimeStr($to->personal, $this->serverEncoding) : null;
 					$toStrings[] = $toName ? "$toName <$toEmail>" : $toEmail;
-					$mail->to[$toEmail] = $toName;
+					$header->to[$toEmail] = $toName;
 				}
 			}
-			$mail->toString = implode(', ', $toStrings);
+			$header->toString = implode(', ', $toStrings);
 		}
 
 		if(isset($head->cc)) {
 			foreach($head->cc as $cc) {
-				$mail->cc[strtolower($cc->mailbox . '@' . $cc->host)] = isset($cc->personal) ? $this->decodeMimeStr($cc->personal, $this->serverEncoding) : null;
+				if(!empty($cc->mailbox) && !empty($cc->host)) {
+					$header->cc[strtolower($cc->mailbox . '@' . $cc->host)] = isset($cc->personal) ? $this->decodeMimeStr($cc->personal, $this->serverEncoding) : null;
+				}
+			}
+		}
+
+		if(isset($head->bcc)) {
+			foreach($head->bcc as $bcc) {
+				if(!empty($bcc->mailbox) && !empty($bcc->host)) {
+					$header->bcc[strtolower($bcc->mailbox . '@' . $bcc->host)] = isset($bcc->personal) ? $this->decodeMimeStr($bcc->personal, $this->serverEncoding) : null;
+				}
 			}
 		}
 
 		if(isset($head->reply_to)) {
 			foreach($head->reply_to as $replyTo) {
-				$mail->replyTo[strtolower($replyTo->mailbox . '@' . $replyTo->host)] = isset($replyTo->personal) ? $this->decodeMimeStr($replyTo->personal, $this->serverEncoding) : null;
+				$header->replyTo[strtolower($replyTo->mailbox . '@' . $replyTo->host)] = isset($replyTo->personal) ? $this->decodeMimeStr($replyTo->personal, $this->serverEncoding) : null;
 			}
 		}
 
 		if(isset($head->message_id)) {
-			$mail->messageId = $head->message_id;
+			$header->messageId = $head->message_id;
 		}
+
+		return $header;
+	}
+
+	/**
+	 * Get mail data
+	 *
+	 * @param $mailId
+	 * @param bool $markAsSeen
+	 * @return IncomingMail
+	 */
+	public function getMail($mailId, $markAsSeen = true) {
+		$mail = new IncomingMail();
+		$mail->setHeader($this->getMailHeader($mailId));
 
 		$mailStructure = imap_fetchstructure($this->getImapStream(), $mailId, FT_UID);
 
@@ -458,11 +620,17 @@ class Mailbox {
 	}
 
 	protected function initMailPart(IncomingMail $mail, $partStructure, $partNum, $markAsSeen = true) {
-        $options = FT_UID;
-        if(!$markAsSeen) {
-            $options |= FT_PEEK;
-        }
-		$data = $partNum ? imap_fetchbody($this->getImapStream(), $mail->id, $partNum, $options) : imap_body($this->getImapStream(), $mail->id, $options);
+		$options = FT_UID;
+		if(!$markAsSeen) {
+			$options |= FT_PEEK;
+		}
+
+		if($partNum) { // don't use ternary operator to optimize memory usage / parsing speed (see http://fabien.potencier.org/the-php-ternary-operator-fast-or-not.html)
+			$data = imap_fetchbody($this->getImapStream(), $mail->id, $partNum, $options);
+		}
+		else {
+			$data = imap_body($this->getImapStream(), $mail->id, $options);
+		}
 
 		if($partStructure->encoding == 1) {
 			$data = imap_utf8($data);
@@ -481,7 +649,7 @@ class Mailbox {
 		$params = array();
 		if(!empty($partStructure->parameters)) {
 			foreach($partStructure->parameters as $param) {
-				$params[strtolower($param->attribute)] = $param->value;
+				$params[strtolower($param->attribute)] = $this->decodeMimeStr($param->value);
 			}
 		}
 		if(!empty($partStructure->dparameters)) {
@@ -496,12 +664,16 @@ class Mailbox {
 			}
 		}
 
-		// attachments
-		$attachmentId = $partStructure->ifid
-			? trim($partStructure->id, " <>")
-			: (isset($params['filename']) || isset($params['name']) ? mt_rand() . mt_rand() : null);
+		$isAttachment = $partStructure->ifid || isset($params['filename']) || isset($params['name']);
 
-		if($attachmentId) {
+		// ignore contentId on body when mail isn't multipart (https://github.com/barbushin/php-imap/issues/71)
+		if(!$partNum && TYPETEXT === $partStructure->type) {
+			$isAttachment = false;
+		}
+
+		if($isAttachment) {
+			$attachmentId = mt_rand() . mt_rand();
+
 			if(empty($params['filename']) && empty($params['name'])) {
 				$fileName = $attachmentId . '.' . strtolower($partStructure->subtype);
 			}
@@ -510,9 +682,12 @@ class Mailbox {
 				$fileName = $this->decodeMimeStr($fileName, $this->serverEncoding);
 				$fileName = $this->decodeRFC2231($fileName, $this->serverEncoding);
 			}
+
 			$attachment = new IncomingMailAttachment();
 			$attachment->id = $attachmentId;
+			$attachment->contentId = $partStructure->ifid ? trim($partStructure->id, " <>") : null;
 			$attachment->name = $fileName;
+			$attachment->disposition = (isset($partStructure->disposition) ? $partStructure->disposition : null);
 			if($this->attachmentsDir) {
 				$replace = array(
 					'/\s/' => '_',
@@ -522,6 +697,12 @@ class Mailbox {
 				);
 				$fileSysName = preg_replace('~[\\\\/]~', '', $mail->id . '_' . $attachmentId . '_' . preg_replace(array_keys($replace), $replace, $fileName));
 				$attachment->filePath = $this->attachmentsDir . DIRECTORY_SEPARATOR . $fileSysName;
+
+				if(strlen($attachment->filePath) > 255) {
+					$ext = pathinfo($attachment->filePath, PATHINFO_EXTENSION);
+					$attachment->filePath = substr($attachment->filePath, 0, 255 - 1 - strlen($ext)) . "." . $ext;
+				}
+
 				file_put_contents($attachment->filePath, $data);
 			}
 			$mail->addAttachment($attachment);
@@ -544,7 +725,7 @@ class Mailbox {
 		}
 		if(!empty($partStructure->parts)) {
 			foreach($partStructure->parts as $subPartNum => $subPartStructure) {
-				if($partStructure->type == 2 && $partStructure->subtype == 'RFC822') {
+				if($partStructure->type == 2 && $partStructure->subtype == 'RFC822' && (!isset($partStructure->disposition) || $partStructure->disposition !== "attachment")) {
 					$this->initMailPart($mail, $subPartStructure, $partNum, $markAsSeen);
 				}
 				else {
@@ -567,8 +748,8 @@ class Mailbox {
 	}
 
 	function isUrlEncoded($string) {
-		$hasInvalidChars = preg_match( '#[^%a-zA-Z0-9\-_\.\+]#', $string );
-		$hasEscapedChars = preg_match( '#%[a-zA-Z0-9]{2}#', $string );
+		$hasInvalidChars = preg_match('#[^%a-zA-Z0-9\-_\.\+]#', $string);
+		$hasEscapedChars = preg_match('#%[a-zA-Z0-9]{2}#', $string);
 		return !$hasInvalidChars && $hasEscapedChars;
 	}
 
@@ -589,23 +770,82 @@ class Mailbox {
 	 * @param string $fromEncoding
 	 * @param string $toEncoding
 	 * @return string Converted string if conversion was successful, or the original string if not
+	 * @throws Exception
 	 */
 	protected function convertStringEncoding($string, $fromEncoding, $toEncoding) {
-		$convertedString = null;
-		if($string && $fromEncoding != $toEncoding) {
-			$convertedString = @iconv($fromEncoding, $toEncoding . '//IGNORE', $string);
-			if(!$convertedString && extension_loaded('mbstring')) {
-				$convertedString = @mb_convert_encoding($string, $toEncoding, $fromEncoding);
-			}
+		if(!$string || $fromEncoding == $toEncoding) {
+			return $string;
 		}
-		return $convertedString ?: $string;
+		$convertedString = function_exists('iconv') ? @iconv($fromEncoding, $toEncoding . '//IGNORE', $string) : null;
+		if(!$convertedString && extension_loaded('mbstring')) {
+			$convertedString = @mb_convert_encoding($string, $toEncoding, $fromEncoding);
+		}
+		if(!$convertedString) {
+			throw new Exception('Mime string encoding conversion failed');
+		}
+		return $convertedString;
 	}
 
 	public function __destruct() {
 		$this->disconnect();
 	}
+
+	protected function setImapPath($imapPath) {
+		$this->imapPath = imap_utf7_encode($imapPath);
+	}
+
+	/**
+	 * Gets imappath
+	 * @return string
+	 */
+	public function getImapPath() {
+		return $this->imapPath;
+	}
+
+	/**
+	 * Get message in MBOX format
+	 * @param $mailId
+	 * @return string
+	 */
+	public function getMailMboxFormat($mailId) {
+		return imap_fetchheader($this->getImapStream(), $mailId, FT_UID && FT_PREFETCHTEXT) . imap_body($this->getImapStream(), $mailId, FT_UID);
+	}
+
+	/**
+	 * Get folders list
+	 * @param string $search
+	 * @return array
+	 */
+	public function getMailboxes($search = "*") {
+		$arr = array();
+		if($t = imap_getmailboxes($this->getImapStream(), $this->imapPath, $search)) {
+			foreach($t as $item) {
+				$arr[] = array(
+					"fullpath" => $item->name,
+					"attributes" => $item->attributes,
+					"delimiter" => $item->delimiter,
+					"shortpath" => substr($item->name, strlen($this->imapPath) - strlen("INBOX")),
+				);
+			}
+		}
+		return $arr;
+	}
+
+	/**
+	 * Creates a new mailbox
+	 * @param string $mailbox
+	 * @return bool
+	 * @deprecated
+	 */
+	public function createCustomMailbox($mailbox = "") {
+		return $this->createMailbox($mailbox);
+	}
 }
 
 class Exception extends \Exception {
+
+}
+
+class ConnectionException extends Exception {
 
 }
